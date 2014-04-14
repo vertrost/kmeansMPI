@@ -18,20 +18,19 @@ unsigned int UniformRandom(unsigned int max_value) {
     return ((max_value + 1 == 0) ? rnd : rnd % (max_value + 1));
 }
 
-double Distance(const Point& point1, const Point& point2) {
+double Distance(double *data_local, const Point& point2, int k, int D) {
     double distance_sqr = 0;
-    int dimensions = point1.size();
-    for (int i = 0; i < dimensions; ++i) {
-        distance_sqr += (point1[i] - point2[i]) * (point1[i] - point2[i]);
+    for (int i = 0; i < D; ++i) {
+		distance_sqr += (data_local[k*D + i] - point2[i]) * (data_local[k*D + i] - point2[i]);
     }
     return sqrt(distance_sqr);
 }
 
-int FindNearestCentroid(const Points& centroids, const Point& point) {
-    double min_distance = Distance(point, centroids[0]);
+int FindNearestCentroid(const Points& centroids, double *data_local, int k, int D) {
+    double min_distance = Distance(data_local, centroids[0], k, D);
     int centroid_index = 0;
     for (int i = 1; i < centroids.size(); ++i) {
-        double distance = Distance(point, centroids[i]);
+        double distance = Distance(data_local, centroids[i], k, D);
         if (distance < min_distance) {
             min_distance = distance;
             centroid_index = i;
@@ -54,7 +53,7 @@ Point GetRandomPosition(const Points& centroids) {
     return new_position;
 }
 
-vector<int> KMeans(double *_data, int K, int N, int D) {
+/*vector<int> KMeans(double *_data, int K, int N, int D) {
     int data_size = N;
     int dimensions = D;
     vector<int> clusters(data_size);
@@ -69,8 +68,8 @@ vector<int> KMeans(double *_data, int K, int N, int D) {
 			data[i][j] = _data[i*N + j];
 	}
 
-	if (rank == 0) {
-		for (int i = 0; i < K; ++i) {
+	//if (rank == 0) {
+	{for (int i = 0; i < K; ++i) {
 			centroids[i] = data[UniformRandom(data_size - 1)];
 		}
 	}
@@ -79,7 +78,7 @@ vector<int> KMeans(double *_data, int K, int N, int D) {
     while (!converged) {
         converged = true;
         for (int i = 0; i < data_size; ++i) {
-            int nearest_cluster = FindNearestCentroid(centroids, data[i]);
+            int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D);
             if (clusters[i] != nearest_cluster) {
                 clusters[i] = nearest_cluster;
                 converged = false;
@@ -109,7 +108,7 @@ vector<int> KMeans(double *_data, int K, int N, int D) {
     }
 
     return clusters;
-}
+}*/
 
 void WriteOutput(const vector<int>& clusters, ofstream& output) {
     for (int i = 0; i < clusters.size(); ++i) {
@@ -192,9 +191,8 @@ int main(int argc , char** argv) {
 
 	// Initialize centroids randomly at data points
 	Points centroids(K);
-	int *_centroids = (int*)malloc(K*D*sizeof(double));
+	double *_centroids = (double*)malloc(K*D*sizeof(double));
 
-	Points data;
 	data.assign(N, Point(D));
 	for (int i = 0; i < N; ++i) {
 		for (int j = 0; j < D; j++)
@@ -235,7 +233,7 @@ int main(int argc , char** argv) {
 			for (int j = 0; j < D; ++j) {
 				p[i] = data_local[i*partsize + j];
 			}
-			int nearest_cluster = FindNearestCentroid(centroids, p); //stopped here
+			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D); //stopped here
 			if (clusters[i] != nearest_cluster) {
 				clusters[i] = nearest_cluster;
 				converged = false;
