@@ -40,17 +40,13 @@ int FindNearestCentroid(const double* centroids, const double *data_local, int k
 }
 
 // Calculates new centroid position as mean of positions of 3 random centroids
-Point GetRandomPosition(const Points& centroids) {
-    int K = centroids.size();
+void GetRandomPosition(double* centroids, int i, int K, int D) {
     int c1 = rand() % K;
     int c2 = rand() % K;
     int c3 = rand() % K;
-    int dimensions = centroids[0].size();
-    Point new_position(dimensions);
-    for (int d = 0; d < dimensions; ++d) {
-        new_position[d] = (centroids[c1][d] + centroids[c2][d] + centroids[c3][d]) / 3;
+    for (int d = 0; d < D; ++d) {
+        centroids[i * D + d] = (centroids[c1*D + d] + centroids[c2*D + d] + centroids[c3*D + d]) / 3;
     }
-    return new_position;
 }
 
 /*vector<int> KMeans(double *_data, int K, int N, int D) {
@@ -155,7 +151,7 @@ int main(int argc , char** argv) {
 			for (int d = 0; d < D; ++d) {
 				double coord;
 				input >> coord;
-				data[i*N + d] = coord;
+				data[i*D + d] = coord;
 			}
 		}
 		input.close();
@@ -173,6 +169,7 @@ int main(int argc , char** argv) {
 		MPI_Abort(MPI_COMM_WORLD, 1);
 	int partsize = N / commsize;
 	data_local = (double*)malloc(partsize*D*sizeof(double));
+	int* clusters_local = (int*)malloc(partsize*sizeof(int));
 
 	// Broadcasting variables
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -186,7 +183,8 @@ int main(int argc , char** argv) {
 	// ================= start calcing =======================
 	
 	// Initialize centroids randomly at data points
-	double* centroids = (double*)malloc(K*D*sizeof(double));	
+	double* centroids = (double*)malloc(K*D*sizeof(double));
+	double* centroids_glob = (double*)malloc(K*D*sizeof(double));
 
 	// master is choosing first centroids 
 	if (rank == 0) {
@@ -202,42 +200,45 @@ int main(int argc , char** argv) {
 		converged = true;
 		for (int i = 0; i < partsize; ++i) {
 			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D); //stopped here
-
-
-
-			if (clusters[i] != nearest_cluster) {
-				clusters[i] = nearest_cluster;
+			if (clusters_local[i] != nearest_cluster) {
+				clusters_local[i] = nearest_cluster;
 				converged = false;
 			}
 		}
-		/*if (converged) {
+		if (converged) {
 			break;
-		}*/
-
-		/*vector<int> clusters_sizes(K);
-		centroids.assign(K, Point(dimensions));*/
-		for (int i = 0; i < partsize; ++i) {
-			for (int d = 0; d < D; ++d) {
-				centroids[clusters[i]][d] += data[i][d];
-			}
-			++clusters_sizes[clusters[i]];
+			//MPI_throw_exception?
 		}
 
-		//here broadcasting
+		/*vector<int> clusters_sizes(K);*/
+		int* clusters_sizes = (int*)malloc(K*sizeof(int));
+		int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
+		for (int i = 0; i < partsize; ++i) {
+			for (int d = 0; d < D; ++d) {
+				centroids[clusters_local[i * D + d]] += data[i * D + d];
+			}
+			++clusters_sizes[clusters_local[i]];
+		}
+
+		//here broadcasting / reducing
+		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+		double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
+		int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
 
 		for (int i = 0; i < K; ++i) {
 			if (clusters_sizes[i] != 0) {
-				for (int d = 0; d < dimensions; ++d) {
-					centroids[i][d] /= clusters_sizes[i];
+				for (int d = 0; d < D; ++d) {
+					centroids[i*D + d] /= clusters_sizes[i];
 				}
 			}
 			else {
-				centroids[i] = GetRandomPosition(centroids);
+				GetRandomPosition(centroids, i, K, D); //omg
+				MPI_Bcast(&centroids[i], D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 			}
 		}
 	}
-
-    //vector<int> clusters = KMeans(data, K, N, D);
 
     //WriteOutput(clusters, output);
     output.close();
