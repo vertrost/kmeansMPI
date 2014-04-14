@@ -106,8 +106,8 @@ void GetRandomPosition(double* centroids, int i, int K, int D) {
     return clusters;
 }*/
 
-void WriteOutput(const vector<int>& clusters, ofstream& output) {
-    for (int i = 0; i < clusters.size(); ++i) {
+void WriteOutput(const int* clusters, ofstream& output, int N) {
+    for (int i = 0; i < N; ++i) {
         output << clusters[i] << endl;
     }
 }
@@ -116,7 +116,6 @@ int main(int argc , char** argv) {
 
 	int rank, commsize, len;
 	char host[MPI_MAX_PROCESSOR_NAME];
-	MPI_Status status;
 
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank); //rank of current processor
@@ -124,10 +123,10 @@ int main(int argc , char** argv) {
 	MPI_Get_processor_name(host, &len); //get hostname
 
 	int K, N, D;
-	//Points data;
 	double* data;
-	double* data_local;
 	ofstream output;
+
+	printf("1 %d\n", rank);
 
 	if (rank == 0) {
 		if (argc != 4) {
@@ -156,6 +155,8 @@ int main(int argc , char** argv) {
 		}
 		input.close();
 
+		printf("2 %d\n", rank);
+
 		char* output_file = argv[3];
 		output.open(output_file, ifstream::out);
 		if (!output) {
@@ -168,8 +169,10 @@ int main(int argc , char** argv) {
 	if (N % commsize != 0)
 		MPI_Abort(MPI_COMM_WORLD, 1);
 	int partsize = N / commsize;
-	data_local = (double*)malloc(partsize*D*sizeof(double));
+	double *data_local = (double*)malloc(partsize*D*sizeof(double));
 	int* clusters_local = (int*)malloc(partsize*sizeof(int));
+
+	printf("3 %d\n", rank);
 
 	// Broadcasting variables
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -177,8 +180,15 @@ int main(int argc , char** argv) {
 	MPI_Bcast(&D, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Scatter(data, N*D, MPI_DOUBLE,
 		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+	/*for (int i = 0; i < partsize; ++i) {
+		for (int d = 0; d < D; ++d) {
+			cout << data_local[i*D + d] << " ";
+		}
+		std::cout << endl;
+	}*/
 		
-    srand(123); // for reproducible results
+    std::srand(123); // for reproducible results
 
 	// ================= start calcing =======================
 	
@@ -189,33 +199,43 @@ int main(int argc , char** argv) {
 	// master is choosing first centroids 
 	if (rank == 0) {
 		for (int i = 0; i < K; ++i) {
-			centroids[i] = data[UniformRandom(N - 1)]; //?
+			unsigned int index = UniformRandom(N - 1);
+			for (int d = 0; d < D; ++d) {
+				centroids[i*D + d] = data[index*D + d];
+			}
 		}
 	}
 
+	printf("4 %d\n", rank);
+
 	MPI_Bcast(centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-	
+		
 	bool converged = false;
+	int* clusters_sizes = (int*)malloc(K*sizeof(int));
+	int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
+	printf("5 %d\n", rank);
 	while (!converged) {
 		converged = true;
 		for (int i = 0; i < partsize; ++i) {
-			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D); //stopped here
+			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D);
 			if (clusters_local[i] != nearest_cluster) {
 				clusters_local[i] = nearest_cluster;
 				converged = false;
 			}
 		}
+		
+		if (converged) {
+			MPI_Bcast(&converged, 1, MPI_C_BOOL, rank, MPI_COMM_WORLD);
+		}
+		MPI_Barrier(MPI_COMM_WORLD);
 		if (converged) {
 			break;
-			//MPI_throw_exception?
 		}
+		
 
-		/*vector<int> clusters_sizes(K);*/
-		int* clusters_sizes = (int*)malloc(K*sizeof(int));
-		int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
-		for (int i = 0; i < partsize; ++i) {
+		for (int i = 0; i < K; ++i) {
 			for (int d = 0; d < D; ++d) {
-				centroids[clusters_local[i * D + d]] += data[i * D + d];
+				centroids[clusters_local[i] + d] += data[i * D + d];
 			}
 			++clusters_sizes[clusters_local[i]];
 		}
@@ -223,6 +243,7 @@ int main(int argc , char** argv) {
 		//here broadcasting / reducing
 		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+		
 
 		double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
 		int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
@@ -234,14 +255,30 @@ int main(int argc , char** argv) {
 				}
 			}
 			else {
-				GetRandomPosition(centroids, i, K, D); //omg
+				GetRandomPosition(centroids, i, K, D);
 				MPI_Bcast(&centroids[i], D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 			}
 		}
 	}
+	MPI_Barrier(MPI_COMM_WORLD);
 
-    //WriteOutput(clusters, output);
-    output.close();
+	int* clusters = (int*)malloc(N*sizeof(int));
+	MPI_Gather(clusters_local, partsize, MPI_INT, clusters, partsize, MPI_INT, 0, MPI_COMM_WORLD);
 
+	if (rank == 0) {
+		WriteOutput(clusters, output, N);
+		output.close();
+	}
+
+	std::free(data);
+	std::free(data_local);
+	std::free(clusters_local);
+	std::free(clusters);
+	std::free(centroids);
+	std::free(centroids_glob);
+	std::free(clusters_sizes);
+	std::free(clusters_sizes_glob);
+
+	MPI_Finalize();
     return 0;
 }
