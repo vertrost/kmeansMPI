@@ -18,19 +18,19 @@ unsigned int UniformRandom(unsigned int max_value) {
     return ((max_value + 1 == 0) ? rnd : rnd % (max_value + 1));
 }
 
-double Distance(double *data_local, const Point& point2, int k, int D) {
+double Distance(const double* point, const double* point2, int D) {
     double distance_sqr = 0;
     for (int i = 0; i < D; ++i) {
-		distance_sqr += (data_local[k*D + i] - point2[i]) * (data_local[k*D + i] - point2[i]);
+		distance_sqr += (*(point + i) - *(point2 + i)) * (*(point + i) - *(point2 + i));
     }
     return sqrt(distance_sqr);
 }
 
-int FindNearestCentroid(const Points& centroids, double *data_local, int k, int D) {
-    double min_distance = Distance(data_local, centroids[0], k, D);
+int FindNearestCentroid(const double* centroids, const double *data_local, int k, int K, int D) {
+    double min_distance = Distance(&data_local[k], centroids, D);
     int centroid_index = 0;
-    for (int i = 1; i < centroids.size(); ++i) {
-        double distance = Distance(data_local, centroids[i], k, D);
+    for (int i = 1; i < K; ++i) {
+        double distance = Distance(&data_local[k], &centroids[i], D);
         if (distance < min_distance) {
             min_distance = distance;
             centroid_index = i;
@@ -128,9 +128,9 @@ int main(int argc , char** argv) {
 	MPI_Get_processor_name(host, &len); //get hostname
 
 	int K, N, D;
-	Points data;
-	double *_data;
-	double *data_local;
+	//Points data;
+	double* data;
+	double* data_local;
 	ofstream output;
 
 	if (rank == 0) {
@@ -150,12 +150,12 @@ int main(int argc , char** argv) {
 		}
 
 		input >> N >> D;
-		_data = (double*)malloc(N * D *sizeof(double));
+		data = (double*)malloc(N * D *sizeof(double));
 		for (int i = 0; i < N; ++i) {
 			for (int d = 0; d < D; ++d) {
 				double coord;
 				input >> coord;
-				_data[i*N + d] = coord;
+				data[i*N + d] = coord;
 			}
 		}
 		input.close();
@@ -178,79 +178,53 @@ int main(int argc , char** argv) {
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&D, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-	MPI_Bcast(_data, N * D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-	
+	MPI_Scatter(data, N*D, MPI_DOUBLE,
+		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		
     srand(123); // for reproducible results
 
 	// ================= start calcing =======================
-
-	int data_size = N;
-	int dimensions = D;
-	vector<int> clusters(data_size);
-
+	
 	// Initialize centroids randomly at data points
-	Points centroids(K);
-	double *_centroids = (double*)malloc(K*D*sizeof(double));
+	double* centroids = (double*)malloc(K*D*sizeof(double));	
 
-	data.assign(N, Point(D));
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < D; j++)
-			data[i][j] = _data[i*N + j];
-	}
-
-	MPI_Scatter(_data, N*D, MPI_DOUBLE,
-		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+	// master is choosing first centroids 
 	if (rank == 0) {
 		for (int i = 0; i < K; ++i) {
-			centroids[i] = data[UniformRandom(data_size - 1)];
-			for (int j = 0; j < D; ++j) {
-				_centroids[i*N + j] = centroids[i][j];
-			}
-		}
-	}
-	//test
-
-	MPI_Bcast(_centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-	if (rank > 0) {
-		for (int i = 0; i < K; ++i) {
-			for (int j = 0; j < D; ++j) {
-				centroids[i][j] = _centroids[i*N + j];
-			}
+			centroids[i] = data[UniformRandom(N - 1)]; //?
 		}
 	}
 
-	//data ready, centroids ready
-
+	MPI_Bcast(centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	
 	bool converged = false;
 	while (!converged) {
 		converged = true;
 		for (int i = 0; i < partsize; ++i) {
-			//int nearest_cluster = FindNearestCentroid(centroids, data[i]);
-			Point p;
-			for (int j = 0; j < D; ++j) {
-				p[i] = data_local[i*partsize + j];
-			}
-			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D); //stopped here
+			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D); //stopped here
+
+
+
 			if (clusters[i] != nearest_cluster) {
 				clusters[i] = nearest_cluster;
 				converged = false;
 			}
 		}
-		if (converged) {
+		/*if (converged) {
 			break;
-		}
+		}*/
 
-		vector<int> clusters_sizes(K);
-		centroids.assign(K, Point(dimensions));
-		for (int i = 0; i < data_size; ++i) {
-			for (int d = 0; d < dimensions; ++d) {
+		/*vector<int> clusters_sizes(K);
+		centroids.assign(K, Point(dimensions));*/
+		for (int i = 0; i < partsize; ++i) {
+			for (int d = 0; d < D; ++d) {
 				centroids[clusters[i]][d] += data[i][d];
 			}
 			++clusters_sizes[clusters[i]];
 		}
+
+		//here broadcasting
+
 		for (int i = 0; i < K; ++i) {
 			if (clusters_sizes[i] != 0) {
 				for (int d = 0; d < dimensions; ++d) {
