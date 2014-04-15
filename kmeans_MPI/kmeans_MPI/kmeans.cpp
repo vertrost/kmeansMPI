@@ -18,19 +18,22 @@ unsigned int UniformRandom(unsigned int max_value) {
     return ((max_value + 1 == 0) ? rnd : rnd % (max_value + 1));
 }
 
-double Distance(const double* point, const double* point2, int D) {
+double Distance(const double* points1, int pos1, const double* points2, int pos2, int D) {
     double distance_sqr = 0;
-    for (int i = 0; i < D; ++i) {
-		distance_sqr += (*(point + i) - *(point2 + i)) * (*(point + i) - *(point2 + i));
-    }
+	//printf("Point ");
+	for (int i = 0; i < D; ++i) {
+		//printf(" %f %f", points1[pos1*D + i], points2[pos2*D + i]);
+		distance_sqr += (points1[pos1*D + i] - points2[pos2*D + i]) * (points1[pos1*D + i] - points2[pos2*D + i]);
+	}
+	//printf(" %f \n", sqrt(distance_sqr));
     return sqrt(distance_sqr);
 }
 
 int FindNearestCentroid(const double* centroids, const double *data_local, int k, int K, int D) {
-    double min_distance = Distance(&data_local[k], centroids, D);
+    double min_distance = Distance(data_local, k, centroids, 0, D);
     int centroid_index = 0;
     for (int i = 1; i < K; ++i) {
-        double distance = Distance(&data_local[k], &centroids[i], D);
+        double distance = Distance(data_local, k, centroids, i, D);
         if (distance < min_distance) {
             min_distance = distance;
             centroid_index = i;
@@ -39,14 +42,26 @@ int FindNearestCentroid(const double* centroids, const double *data_local, int k
     return centroid_index;
 }
 
+void PrintArray(const double* array, int K, int D) {
+	for (int i = 0; i < K; ++i) {
+		for (int d = 0; d < D; ++d) {
+			printf(" %f", array[i*D + d]);
+		}
+		printf(" \n");
+	}
+}
+
 // Calculates new centroid position as mean of positions of 3 random centroids
 void GetRandomPosition(double* centroids, int i, int K, int D) {
     int c1 = rand() % K;
     int c2 = rand() % K;
     int c3 = rand() % K;
     for (int d = 0; d < D; ++d) {
-        centroids[i * D + d] = (centroids[c1*D + d] + centroids[c2*D + d] + centroids[c3*D + d]) / 3;
+        centroids[i*D + d] = (centroids[c1*D + d] + centroids[c2*D + d] + centroids[c3*D + d]) / 3;
     }
+	printf("getrand");
+	PrintArray(centroids, K, D);
+
 }
 
 /*vector<int> KMeans(double *_data, int K, int N, int D) {
@@ -178,7 +193,7 @@ int main(int argc , char** argv) {
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&D, 1, MPI_INT, 0, MPI_COMM_WORLD);
-	MPI_Scatter(data, N*D, MPI_DOUBLE,
+	MPI_Scatter(data, partsize*D, MPI_DOUBLE,
 		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
 	/*for (int i = 0; i < partsize; ++i) {
@@ -188,13 +203,10 @@ int main(int argc , char** argv) {
 		std::cout << endl;
 	}*/
 		
-    std::srand(123); // for reproducible results
-
-	// ================= start calcing =======================
+    srand(123); // for reproducible results
 	
 	// Initialize centroids randomly at data points
 	double* centroids = (double*)malloc(K*D*sizeof(double));
-	double* centroids_glob = (double*)malloc(K*D*sizeof(double));
 
 	// master is choosing first centroids 
 	if (rank == 0) {
@@ -202,61 +214,92 @@ int main(int argc , char** argv) {
 			unsigned int index = UniformRandom(N - 1);
 			for (int d = 0; d < D; ++d) {
 				centroids[i*D + d] = data[index*D + d];
+				//printf(" %f", centroids[i*D + d]);
 			}
+			//printf(" \n");
 		}
 	}
-
-	printf("4 %d\n", rank);
-
+	
 	MPI_Bcast(centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-		
+
 	bool converged = false;
 	int* clusters_sizes = (int*)malloc(K*sizeof(int));
-	int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
 	printf("5 %d\n", rank);
+	int counter = 0;
 	while (!converged) {
+		++counter;
+		if (counter > 6) {
+			MPI_Abort(MPI_COMM_WORLD, 1);
+		}
 		converged = true;
 		for (int i = 0; i < partsize; ++i) {
 			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D);
+			//printf("%d\n", nearest_cluster);
 			if (clusters_local[i] != nearest_cluster) {
 				clusters_local[i] = nearest_cluster;
+				//printf(" %d", clusters_local[i]);
 				converged = false;
 			}
 		}
-		
+
+		MPI_Barrier(MPI_COMM_WORLD);		
 		if (converged) {
 			MPI_Bcast(&converged, 1, MPI_C_BOOL, rank, MPI_COMM_WORLD);
 		}
 		MPI_Barrier(MPI_COMM_WORLD);
+
 		if (converged) {
 			break;
-		}
-		
+		}		
 
-		for (int i = 0; i < K; ++i) {
+		for (int i = 0; i < partsize; ++i) {
 			for (int d = 0; d < D; ++d) {
-				centroids[clusters_local[i] + d] += data[i * D + d];
+				centroids[clusters_local[i]*D + d] += data[i * D + d];
 			}
 			++clusters_sizes[clusters_local[i]];
 		}
 
+		int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
+		double* centroids_glob = (double*)malloc(K*D*sizeof(double));
+
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes_glob[i] = 0;
+			for (int d = 0; d < D; ++d) {
+				centroids_glob[i*D + d] = 0;
+			}
+		}
+		
 		//here broadcasting / reducing
 		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes[i] = clusters_sizes_glob[i];
+			for (int d = 0; d < D; ++d) {
+				centroids[i*D + d] = centroids_glob[i*D + d];
+			}
+		}
 		
+		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
+		free(centroids_glob);
+		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
+		free(clusters_sizes_glob);
 
-		double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
-		int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
-
+		printf("free");
+		PrintArray(centroids, K, D);
+		
 		for (int i = 0; i < K; ++i) {
 			if (clusters_sizes[i] != 0) {
 				for (int d = 0; d < D; ++d) {
+					//printf(" %d", clusters_sizes[i]);
 					centroids[i*D + d] /= clusters_sizes[i];
 				}
 			}
 			else {
 				GetRandomPosition(centroids, i, K, D);
-				MPI_Bcast(&centroids[i], D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+				printf("else");
+				PrintArray(centroids, K, D);
+				MPI_Bcast(centroids + i*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 			}
 		}
 	}
@@ -270,14 +313,14 @@ int main(int argc , char** argv) {
 		output.close();
 	}
 
-	std::free(data);
-	std::free(data_local);
-	std::free(clusters_local);
-	std::free(clusters);
-	std::free(centroids);
-	std::free(centroids_glob);
-	std::free(clusters_sizes);
-	std::free(clusters_sizes_glob);
+	free(data);
+	free(data_local);
+	free(clusters_local);
+	free(clusters);
+	free(centroids);
+	//free(centroids_glob);
+	free(clusters_sizes);
+	//free(clusters_sizes_glob);
 
 	MPI_Finalize();
     return 0;
