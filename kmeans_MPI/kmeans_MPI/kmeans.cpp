@@ -134,6 +134,8 @@ int main(int argc , char** argv) {
 	MPI_Comm_size(MPI_COMM_WORLD, &commsize); //amount of all processors
 	MPI_Get_processor_name(host, &len); //get hostname
 
+    double t0 = MPI_Wtime();
+
 	int K, N, D;
 	double* data;
 	ofstream output;
@@ -156,7 +158,6 @@ int main(int argc , char** argv) {
 
 		input >> N >> D;
 		data = (double*)malloc(N * D *sizeof(double));
-		printf(" rank %d test\n", rank);
 		for (int i = 0; i < N; ++i) {
 			for (int d = 0; d < D; ++d) {
 				double coord;
@@ -228,7 +229,6 @@ int main(int argc , char** argv) {
 		++counter;
 		/*if (counter > 4)
 			break;*/
-		printf("thread %d entered while, inter %d\n", rank, counter);
 		
         // ====================== finding clusters =================
 		converged = true;
@@ -241,20 +241,14 @@ int main(int argc , char** argv) {
 		}
 
 		//synchronization
-		MPI_Barrier(MPI_COMM_WORLD);
 		int flag = 0;
 		if (converged) {
 			flag = 1;
-            printf("flag = 1 in %d thread", rank);
         }
         int flag_all = 0;
         MPI_Reduce(&flag, &flag_all, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Bcast(&flag_all, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        //MPI_Bcast(&flag, 1, MPI_INT, rank, MPI_COMM_WORLD);
-        printf("flag = %d in thread %d", flag, rank);
-		//MPI_Barrier(MPI_COMM_WORLD);
 		if (flag_all > 0) {
-            printf("flag_all=%d, BREAK!!!!!!!!!!!!!!!!!!", flag_all);
 			break;
 		}
 		
@@ -295,15 +289,8 @@ int main(int argc , char** argv) {
 		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        if (rank == 1) {printf("predlast\n"); PrintArray(centroids, K, D);}
 
         //here centroids OK, but _glob seems not ok
-		printf("1\n");
-		//if (rank == 0) PrintArray(centroids, K, D);
-        if (rank == 0) { for (int i = 0; i < K; ++i) {
-            cout << clusters_sizes_glob[i] << " ";
-        } }
-
 		for (int i = 0; i < K; ++i) {
 			clusters_sizes[i] = clusters_sizes_glob[i];
 			for (int d = 0; d < D; ++d) {
@@ -326,15 +313,12 @@ int main(int argc , char** argv) {
 			}
 			else {
 				GetRandomPosition(centroids, i, K, D);
-				printf("else rank %d", rank);
 				MPI_Bcast(centroids + i*D*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 			}
 		}
 
 		MPI_Barrier(MPI_COMM_WORLD);
 
-        //if (rank == 0) {printf("last\n"); PrintArray(centroids, K, D);}
-		
 		free(clusters_sizes);
 	}
 
@@ -359,6 +343,9 @@ int main(int argc , char** argv) {
 	free(clusters_local);
 	free(clusters);
 	free(centroids);
+
+    if (rank == 0)
+        cout << MPI_Wtime() - t0 << endl;
 
 	MPI_Finalize();
     return 0;
