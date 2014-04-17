@@ -59,9 +59,64 @@ void GetRandomPosition(double* centroids, int i, int K, int D) {
     for (int d = 0; d < D; ++d) {
         centroids[i*D + d] = (centroids[c1*D + d] + centroids[c2*D + d] + centroids[c3*D + d]) / 3;
     }
-	printf("getrand");
-	PrintArray(centroids, K, D);
 }
+
+/*vector<int> KMeans(double *_data, int K, int N, int D) {
+    int data_size = N;
+    int dimensions = D;
+    vector<int> clusters(data_size);
+
+    // Initialize centroids randomly at data points
+    Points centroids(K);
+	int *_centroids = (int*)malloc(K*D*sizeof(double));
+	Points data;
+	data.assign(N, Point(D));
+	for (int i = 0; i < N; ++i) {
+		for (int j = 0; j < D; j++)
+			data[i][j] = _data[i*N + j];
+	}
+
+	//if (rank == 0) {
+	{for (int i = 0; i < K; ++i) {
+			centroids[i] = data[UniformRandom(data_size - 1)];
+		}
+	}
+    
+    bool converged = false;
+    while (!converged) {
+        converged = true;
+        for (int i = 0; i < data_size; ++i) {
+            int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D);
+            if (clusters[i] != nearest_cluster) {
+                clusters[i] = nearest_cluster;
+                converged = false;
+            }
+        }
+        if (converged) {
+            break;
+        }
+
+        vector<int> clusters_sizes(K);
+        centroids.assign(K, Point(dimensions));
+        for (int i = 0; i < data_size; ++i) {
+            for (int d = 0; d < dimensions; ++d) {
+                centroids[clusters[i]][d] += data[i][d];
+            }
+            ++clusters_sizes[clusters[i]];
+        }
+        for (int i = 0; i < K; ++i) {
+            if (clusters_sizes[i] != 0) {
+                for (int d = 0; d < dimensions; ++d) {
+                    centroids[i][d] /= clusters_sizes[i];
+                }
+            } else {
+                centroids[i] = GetRandomPosition(centroids);
+            }
+        }
+    }
+
+    return clusters;
+}*/
 
 void WriteOutput(const int* clusters, ofstream& output, int N) {
     for (int i = 0; i < N; ++i) {
@@ -79,11 +134,11 @@ int main(int argc , char** argv) {
 	MPI_Comm_size(MPI_COMM_WORLD, &commsize); //amount of all processors
 	MPI_Get_processor_name(host, &len); //get hostname
 
+    double t0 = MPI_Wtime();
+
 	int K, N, D;
 	double* data;
 	ofstream output;
-
-	printf("1 %d\n", rank);
 
 	if (rank == 0) {
 		if (argc != 4) {
@@ -112,7 +167,8 @@ int main(int argc , char** argv) {
 		}
 		input.close();
 
-		printf("2 %d\n", rank);
+		if (N % commsize != 0)
+			MPI_Abort(MPI_COMM_WORLD, 1);
 
 		char* output_file = argv[3];
 		output.open(output_file, ifstream::out);
@@ -122,19 +178,21 @@ int main(int argc , char** argv) {
 		}
 	}
 
-	//Checking if N cannot be divided by commsize
-	if (N % commsize != 0)
-		MPI_Abort(MPI_COMM_WORLD, 1);
-	int partsize = N / commsize;
-	double *data_local = (double*)malloc(partsize*D*sizeof(double));
-	int* clusters_local = (int*)malloc(partsize*sizeof(int));
+	MPI_Barrier(MPI_COMM_WORLD);
 
-	printf("3 %d\n", rank);
+	//Checking if N cannot be divided by commsize
 
 	// Broadcasting variables
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&D, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+	int partsize = N / commsize;
+
+	
+	double *data_local = (double*)malloc(partsize*D*sizeof(double));
+	int* clusters_local = (int*)malloc(partsize*sizeof(int));
+
 	MPI_Scatter(data, partsize*D, MPI_DOUBLE,
 		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
@@ -156,94 +214,120 @@ int main(int argc , char** argv) {
 			unsigned int index = UniformRandom(N - 1);
 			for (int d = 0; d < D; ++d) {
 				centroids[i*D + d] = data[index*D + d];
-				//printf(" %f", centroids[i*D + d]);
 			}
-			//printf(" \n");
 		}
 	}
 	
 	MPI_Bcast(centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+	
+	//here ok
+	// ================================================================================================
 	bool converged = false;
-	int* clusters_sizes = (int*)malloc(K*sizeof(int));
-	printf("5 %d\n", rank);
+	
 	int counter = 0;
 	while (!converged) {
 		++counter;
-		if (counter > 6) {
-			MPI_Abort(MPI_COMM_WORLD, 1);
-		}
+		/*if (counter > 4)
+			break;*/
+		
+        // ====================== finding clusters =================
 		converged = true;
 		for (int i = 0; i < partsize; ++i) {
 			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D);
-			//printf("%d\n", nearest_cluster);
 			if (clusters_local[i] != nearest_cluster) {
 				clusters_local[i] = nearest_cluster;
-				//printf(" %d", clusters_local[i]);
 				converged = false;
 			}
 		}
 
-		MPI_Barrier(MPI_COMM_WORLD);		
+		//synchronization
+		int flag = 0;
 		if (converged) {
-			MPI_Bcast(&converged, 1, MPI_C_BOOL, rank, MPI_COMM_WORLD);
-		}
-		MPI_Barrier(MPI_COMM_WORLD);
-
-		if (converged) {
+			flag = 1;
+        }
+        int flag_all = 0;
+        MPI_Reduce(&flag, &flag_all, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&flag_all, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		if (flag_all > 0) {
 			break;
-		}		
+		}
+		
+        //recalcing centroids
+		//vector<size_t> clusters_sizes(K);
+		int* clusters_sizes = (int*)malloc(K*sizeof(int));
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes[i] = 0;
+		}
+		//centroids.assign(K, Point(dimensions));
+		for (int i = 0; i < K; ++i) {
+			for (int j = 0; j < D; ++j) {
+				centroids[i*D + j] = 0;
+			}
+		}
 
+
+		//summation centroids and cluster_sizes
 		for (int i = 0; i < partsize; ++i) {
 			for (int d = 0; d < D; ++d) {
-				centroids[clusters_local[i]*D + d] += data[i * D + d];
+				centroids[clusters_local[i]*D + d] += data_local[i * D + d];
 			}
 			++clusters_sizes[clusters_local[i]];
 		}
-
-		int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
+		
+        // gather arrays
+        int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
 		double* centroids_glob = (double*)malloc(K*D*sizeof(double));
-
 		for (int i = 0; i < K; ++i) {
 			clusters_sizes_glob[i] = 0;
 			for (int d = 0; d < D; ++d) {
 				centroids_glob[i*D + d] = 0;
 			}
 		}
-		
+				
 		//here broadcasting / reducing
 		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
 
+
+        //here centroids OK, but _glob seems not ok
 		for (int i = 0; i < K; ++i) {
 			clusters_sizes[i] = clusters_sizes_glob[i];
 			for (int d = 0; d < D; ++d) {
 				centroids[i*D + d] = centroids_glob[i*D + d];
 			}
 		}
-		
-		free(centroids_glob);
-		free(clusters_sizes_glob);
+				
 
-		printf("free");
-		PrintArray(centroids, K, D);
-		
+		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
+		free(centroids_glob);
+		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
+		free(clusters_sizes_glob);
+				
+
 		for (int i = 0; i < K; ++i) {
 			if (clusters_sizes[i] != 0) {
 				for (int d = 0; d < D; ++d) {
-					//printf(" %d", clusters_sizes[i]);
 					centroids[i*D + d] /= clusters_sizes[i];
 				}
 			}
 			else {
 				GetRandomPosition(centroids, i, K, D);
-				printf("else");
-				PrintArray(centroids, K, D);
-				MPI_Bcast(centroids + i*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+				MPI_Bcast(centroids + i*D*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 			}
 		}
+
+		MPI_Barrier(MPI_COMM_WORLD);
+
+		free(clusters_sizes);
 	}
+
 	MPI_Barrier(MPI_COMM_WORLD);
+
+	/*printf("final\n");
+	for (int i = 0; i < partsize; ++i)
+		cout << clusters_local[i] << " ";
+	cout << endl;*/
 
 	int* clusters = (int*)malloc(N*sizeof(int));
 	MPI_Gather(clusters_local, partsize, MPI_INT, clusters, partsize, MPI_INT, 0, MPI_COMM_WORLD);
@@ -253,14 +337,15 @@ int main(int argc , char** argv) {
 		output.close();
 	}
 
-	free(data);
+	if (rank == 0)
+		free(data);
 	free(data_local);
 	free(clusters_local);
 	free(clusters);
 	free(centroids);
-	//free(centroids_glob);
-	free(clusters_sizes);
-	//free(clusters_sizes_glob);
+
+    if (rank == 0)
+        cout << MPI_Wtime() - t0 << endl;
 
 	MPI_Finalize();
     return 0;
