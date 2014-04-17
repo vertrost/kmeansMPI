@@ -61,65 +61,7 @@ void GetRandomPosition(double* centroids, int i, int K, int D) {
     }
 	printf("getrand");
 	PrintArray(centroids, K, D);
-
 }
-
-/*vector<int> KMeans(double *_data, int K, int N, int D) {
-    int data_size = N;
-    int dimensions = D;
-    vector<int> clusters(data_size);
-
-    // Initialize centroids randomly at data points
-    Points centroids(K);
-	int *_centroids = (int*)malloc(K*D*sizeof(double));
-	Points data;
-	data.assign(N, Point(D));
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < D; j++)
-			data[i][j] = _data[i*N + j];
-	}
-
-	//if (rank == 0) {
-	{for (int i = 0; i < K; ++i) {
-			centroids[i] = data[UniformRandom(data_size - 1)];
-		}
-	}
-    
-    bool converged = false;
-    while (!converged) {
-        converged = true;
-        for (int i = 0; i < data_size; ++i) {
-            int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D);
-            if (clusters[i] != nearest_cluster) {
-                clusters[i] = nearest_cluster;
-                converged = false;
-            }
-        }
-        if (converged) {
-            break;
-        }
-
-        vector<int> clusters_sizes(K);
-        centroids.assign(K, Point(dimensions));
-        for (int i = 0; i < data_size; ++i) {
-            for (int d = 0; d < dimensions; ++d) {
-                centroids[clusters[i]][d] += data[i][d];
-            }
-            ++clusters_sizes[clusters[i]];
-        }
-        for (int i = 0; i < K; ++i) {
-            if (clusters_sizes[i] != 0) {
-                for (int d = 0; d < dimensions; ++d) {
-                    centroids[i][d] /= clusters_sizes[i];
-                }
-            } else {
-                centroids[i] = GetRandomPosition(centroids);
-            }
-        }
-    }
-
-    return clusters;
-}*/
 
 void WriteOutput(const int* clusters, ofstream& output, int N) {
     for (int i = 0; i < N; ++i) {
@@ -280,9 +222,7 @@ int main(int argc , char** argv) {
 			}
 		}
 		
-		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
 		free(centroids_glob);
-		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
 		free(clusters_sizes_glob);
 
 		printf("free");
