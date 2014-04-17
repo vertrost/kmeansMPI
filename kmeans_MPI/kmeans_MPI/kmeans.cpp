@@ -61,67 +61,178 @@ void GetRandomPosition(double* centroids, int i, int K, int D) {
     }
 }
 
-/*vector<int> KMeans(double *_data, int K, int N, int D) {
-    int data_size = N;
-    int dimensions = D;
-    vector<int> clusters(data_size);
-
-    // Initialize centroids randomly at data points
-    Points centroids(K);
-	int *_centroids = (int*)malloc(K*D*sizeof(double));
-	Points data;
-	data.assign(N, Point(D));
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < D; j++)
-			data[i][j] = _data[i*N + j];
+int SynchronizedExit(bool converged) {
+	int flag = 0;
+	if (converged) {
+		flag = 1;
 	}
+	int flag_all = 0;
+	MPI_Reduce(&flag, &flag_all, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&flag_all, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	if (flag_all > 0)
+		return 1;
+	else
+		return 0;
 
-	//if (rank == 0) {
-	{for (int i = 0; i < K; ++i) {
-			centroids[i] = data[UniformRandom(data_size - 1)];
-		}
-	}
-    
-    bool converged = false;
-    while (!converged) {
-        converged = true;
-        for (int i = 0; i < data_size; ++i) {
-            int nearest_cluster = FindNearestCentroid(centroids, data_local, i, D);
-            if (clusters[i] != nearest_cluster) {
-                clusters[i] = nearest_cluster;
-                converged = false;
-            }
-        }
-        if (converged) {
-            break;
-        }
-
-        vector<int> clusters_sizes(K);
-        centroids.assign(K, Point(dimensions));
-        for (int i = 0; i < data_size; ++i) {
-            for (int d = 0; d < dimensions; ++d) {
-                centroids[clusters[i]][d] += data[i][d];
-            }
-            ++clusters_sizes[clusters[i]];
-        }
-        for (int i = 0; i < K; ++i) {
-            if (clusters_sizes[i] != 0) {
-                for (int d = 0; d < dimensions; ++d) {
-                    centroids[i][d] /= clusters_sizes[i];
-                }
-            } else {
-                centroids[i] = GetRandomPosition(centroids);
-            }
-        }
-    }
-
-    return clusters;
-}*/
+}
 
 void WriteOutput(const int* clusters, ofstream& output, int N) {
     for (int i = 0; i < N; ++i) {
         output << clusters[i] << endl;
     }
+}
+
+void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank, int partsize, int K, int D) {
+	bool converged = false;
+
+	int counter = 0;
+
+	double t1 = 0;
+	double t2 = 0;
+	double t3 = 0;
+	double t4 = 0;
+	double timestamp;
+	while (!converged) {
+		++counter;
+		/*if (counter > 4)
+		break;*/
+
+		// ====================== finding clusters =================
+		timestamp = MPI_Wtime();
+		converged = true;
+		for (int i = 0; i < partsize; ++i) {
+			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D);
+			if (clusters_local[i] != nearest_cluster) {
+				clusters_local[i] = nearest_cluster;
+				converged = false;
+			}
+		}
+		t1 += MPI_Wtime() - timestamp;
+
+		//synchronization
+		if (SynchronizedExit(converged))
+			break;
+
+		//recalcing centroids
+		
+		timestamp = MPI_Wtime();
+		//vector<size_t> clusters_sizes(K);
+		int* clusters_sizes = (int*)malloc(K*sizeof(int));
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes[i] = 0;
+		}
+		//centroids.assign(K, Point(dimensions));
+		for (int i = 0; i < K; ++i) {
+			for (int j = 0; j < D; ++j) {
+				centroids[i*D + j] = 0;
+			}
+		}
+
+		//PrintArray(centroids, K, D);
+
+		//summation centroids and cluster_sizes
+		for (int i = 0; i < partsize; ++i) {
+			for (int d = 0; d < D; ++d) {
+				centroids[clusters_local[i] * D + d] += data_local[i * D + d];
+			}
+			++clusters_sizes[clusters_local[i]];
+		}
+
+		t2 += MPI_Wtime() - timestamp;
+
+		// gather arrays
+		int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
+		double* centroids_glob = (double*)malloc(K*D*sizeof(double));
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes_glob[i] = 0;
+			for (int d = 0; d < D; ++d) {
+				centroids_glob[i*D + d] = 0;
+			}
+		}
+
+		timestamp = MPI_Wtime();
+		//here broadcasting / reducing
+		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Barrier(MPI_COMM_WORLD);
+		t3 += MPI_Wtime() - timestamp;
+
+
+		//here centroids OK, but _glob seems not ok
+		for (int i = 0; i < K; ++i) {
+			clusters_sizes[i] = clusters_sizes_glob[i];
+			for (int d = 0; d < D; ++d) {
+				centroids[i*D + d] = centroids_glob[i*D + d];
+			}
+		}
+
+
+		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
+		free(centroids_glob);
+		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
+		free(clusters_sizes_glob);
+
+		timestamp = MPI_Wtime();
+		for (int i = 0; i < K; ++i) {
+			if (clusters_sizes[i] != 0) {
+				for (int d = 0; d < D; ++d) {
+					centroids[i*D + d] /= clusters_sizes[i];
+				}
+			}
+			else {
+				GetRandomPosition(centroids, i, K, D);
+				MPI_Bcast(centroids + i*D*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+			}
+		}
+		t4 += MPI_Wtime() - timestamp;
+
+		MPI_Barrier(MPI_COMM_WORLD);
+
+		free(clusters_sizes);
+	}
+
+	if (rank == 0) cout << " t1 = " << t1 << " t2 = " << t2 << " t3 = " << t3 << " t4 = " << t4 << endl;
+}
+
+int ReadPoints(int argc, char** argv, int &K, int &N, int &D, double *data, int &commsize, ofstream &output) {
+	if (argc != 4) {
+		std::printf("Usage: %s number_of_clusters input_file output_file\n", argv[0]);
+		return 1;
+	}
+
+	K = atoi(argv[1]);
+
+	char* input_file = argv[2];
+	ifstream input;
+	input.open(input_file, ifstream::in);
+	if (!input) {
+		cerr << "Error: input file could not be opened" << endl;
+		return 1;
+	}
+
+	free(data);
+	input >> N >> D;
+	data = (double*)malloc(N*D*sizeof(double));
+	for (int i = 0; i < N; ++i) {
+		for (int d = 0; d < D; ++d) {
+			double coord;
+			input >> coord;
+			data[i*D + d] = coord;
+		}
+	}
+	input.close();
+
+	if (N % commsize != 0)
+		MPI_Abort(MPI_COMM_WORLD, 1);
+
+	char* output_file = argv[3];
+	output.open(output_file, ifstream::out);
+	if (!output) {
+		cerr << "Error: output file could not be opened" << endl;
+		return 1;
+	}
+
+	return 0;
 }
 
 int main(int argc , char** argv) {
@@ -141,41 +252,9 @@ int main(int argc , char** argv) {
 	ofstream output;
 
 	if (rank == 0) {
-		if (argc != 4) {
-			std::printf("Usage: %s number_of_clusters input_file output_file\n", argv[0]);
+		data = (double*)malloc(sizeof(double)); //spike =(
+		if (ReadPoints(argc, argv, K, N, D, data, commsize, output))
 			return 1;
-		}
-
-		K = atoi(argv[1]);
-
-		char* input_file = argv[2];
-		ifstream input;
-		input.open(input_file, ifstream::in);
-		if (!input) {
-			cerr << "Error: input file could not be opened" << endl;
-			return 1;
-		}
-
-		input >> N >> D;
-		data = (double*)malloc(N * D *sizeof(double));
-		for (int i = 0; i < N; ++i) {
-			for (int d = 0; d < D; ++d) {
-				double coord;
-				input >> coord;
-				data[i*D + d] = coord;
-			}
-		}
-		input.close();
-
-		if (N % commsize != 0)
-			MPI_Abort(MPI_COMM_WORLD, 1);
-
-		char* output_file = argv[3];
-		output.open(output_file, ifstream::out);
-		if (!output) {
-			cerr << "Error: output file could not be opened" << endl;
-			return 1;
-		}
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -195,14 +274,7 @@ int main(int argc , char** argv) {
 
 	MPI_Scatter(data, partsize*D, MPI_DOUBLE,
 		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-	/*for (int i = 0; i < partsize; ++i) {
-		for (int d = 0; d < D; ++d) {
-			cout << data_local[i*D + d] << " ";
-		}
-		std::cout << endl;
-	}*/
-		
+			
     srand(123); // for reproducible results
 	
 	// Initialize centroids randomly at data points
@@ -220,115 +292,10 @@ int main(int argc , char** argv) {
 	
 	MPI_Bcast(centroids, K*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-	//here ok
-	// ================================================================================================
-	bool converged = false;
-	
-	int counter = 0;
-	while (!converged) {
-		++counter;
-		/*if (counter > 4)
-			break;*/
-		
-        // ====================== finding clusters =================
-		converged = true;
-		for (int i = 0; i < partsize; ++i) {
-			int nearest_cluster = FindNearestCentroid(centroids, data_local, i, K, D);
-			if (clusters_local[i] != nearest_cluster) {
-				clusters_local[i] = nearest_cluster;
-				converged = false;
-			}
-		}
-
-		//synchronization
-		int flag = 0;
-		if (converged) {
-			flag = 1;
-        }
-        int flag_all = 0;
-        MPI_Reduce(&flag, &flag_all, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&flag_all, 1, MPI_INT, 0, MPI_COMM_WORLD);
-		if (flag_all > 0) {
-			break;
-		}
-		
-        //recalcing centroids
-		//vector<size_t> clusters_sizes(K);
-		int* clusters_sizes = (int*)malloc(K*sizeof(int));
-		for (int i = 0; i < K; ++i) {
-			clusters_sizes[i] = 0;
-		}
-		//centroids.assign(K, Point(dimensions));
-		for (int i = 0; i < K; ++i) {
-			for (int j = 0; j < D; ++j) {
-				centroids[i*D + j] = 0;
-			}
-		}
-
-
-		//summation centroids and cluster_sizes
-		for (int i = 0; i < partsize; ++i) {
-			for (int d = 0; d < D; ++d) {
-				centroids[clusters_local[i]*D + d] += data_local[i * D + d];
-			}
-			++clusters_sizes[clusters_local[i]];
-		}
-		
-        // gather arrays
-        int* clusters_sizes_glob = (int*)malloc(K*sizeof(int));
-		double* centroids_glob = (double*)malloc(K*D*sizeof(double));
-		for (int i = 0; i < K; ++i) {
-			clusters_sizes_glob[i] = 0;
-			for (int d = 0; d < D; ++d) {
-				centroids_glob[i*D + d] = 0;
-			}
-		}
-				
-		//here broadcasting / reducing
-		MPI_Allreduce(centroids, centroids_glob, K*D, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-		MPI_Allreduce(clusters_sizes, clusters_sizes_glob, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-        MPI_Barrier(MPI_COMM_WORLD);
-
-
-        //here centroids OK, but _glob seems not ok
-		for (int i = 0; i < K; ++i) {
-			clusters_sizes[i] = clusters_sizes_glob[i];
-			for (int d = 0; d < D; ++d) {
-				centroids[i*D + d] = centroids_glob[i*D + d];
-			}
-		}
-				
-
-		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
-		free(centroids_glob);
-		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
-		free(clusters_sizes_glob);
-				
-
-		for (int i = 0; i < K; ++i) {
-			if (clusters_sizes[i] != 0) {
-				for (int d = 0; d < D; ++d) {
-					centroids[i*D + d] /= clusters_sizes[i];
-				}
-			}
-			else {
-				GetRandomPosition(centroids, i, K, D);
-				MPI_Bcast(centroids + i*D*sizeof(double), D, MPI_DOUBLE, rank, MPI_COMM_WORLD);
-			}
-		}
-
-		MPI_Barrier(MPI_COMM_WORLD);
-
-		free(clusters_sizes);
-	}
-
+	Kmeans(data_local, clusters_local, centroids, rank, partsize, K, D);
 	MPI_Barrier(MPI_COMM_WORLD);
-
-	/*printf("final\n");
-	for (int i = 0; i < partsize; ++i)
-		cout << clusters_local[i] << " ";
-	cout << endl;*/
-
+	
+	//gathering clusters
 	int* clusters = (int*)malloc(N*sizeof(int));
 	MPI_Gather(clusters_local, partsize, MPI_INT, clusters, partsize, MPI_INT, 0, MPI_COMM_WORLD);
 
@@ -337,8 +304,8 @@ int main(int argc , char** argv) {
 		output.close();
 	}
 
-	if (rank == 0)
-		free(data);
+	//if (rank == 0)
+		//free(data);
 	free(data_local);
 	free(clusters_local);
 	free(clusters);
@@ -350,3 +317,5 @@ int main(int argc , char** argv) {
 	MPI_Finalize();
     return 0;
 }
+
+//idea - send partof data between threads during reading
