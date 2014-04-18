@@ -95,8 +95,7 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 	while (!converged) {
 		++counter;
 		//cout << counter << " ";
-		/*if (counter > 4)
-		break;*/
+		if (counter > 100) break;
 
 		// ====================== finding clusters =================
 		timestamp = MPI_Wtime();
@@ -240,9 +239,7 @@ int main(int argc , char** argv) {
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
-
-	//Checking if N cannot be divided by commsize
-
+	
 	// Broadcasting variables
 	MPI_Bcast(&K, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
