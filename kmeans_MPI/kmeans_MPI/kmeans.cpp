@@ -94,6 +94,7 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 	double timestamp;
 	while (!converged) {
 		++counter;
+		//cout << counter << " ";
 		/*if (counter > 4)
 		break;*/
 
@@ -127,9 +128,6 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 				centroids[i*D + j] = 0;
 			}
 		}
-
-		//PrintArray(centroids, K, D);
-
 		//summation centroids and cluster_sizes
 		for (int i = 0; i < partsize; ++i) {
 			for (int d = 0; d < D; ++d) {
@@ -137,7 +135,6 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 			}
 			++clusters_sizes[clusters_local[i]];
 		}
-
 		t2 += MPI_Wtime() - timestamp;
 
 		// gather arrays
@@ -157,19 +154,13 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 		MPI_Barrier(MPI_COMM_WORLD);
 		t3 += MPI_Wtime() - timestamp;
 
-
-		//here centroids OK, but _glob seems not ok
 		for (int i = 0; i < K; ++i) {
 			clusters_sizes[i] = clusters_sizes_glob[i];
 			for (int d = 0; d < D; ++d) {
-				centroids[i*D + d] = centroids_glob[i*D + d];
+				centroids[i * D + d] = centroids_glob[i * D + d];
 			}
 		}
-
-
-		//double* tmp = centroids; centroids = centroids_glob; centroids_glob = tmp;
 		free(centroids_glob);
-		//int* temp = clusters_sizes; clusters_sizes = clusters_sizes_glob; clusters_sizes_glob = temp;
 		free(clusters_sizes_glob);
 
 		timestamp = MPI_Wtime();
@@ -194,47 +185,6 @@ void Kmeans(double* data_local, int* clusters_local, double* centroids, int rank
 	if (rank == 0) cout << " t1 = " << t1 << " t2 = " << t2 << " t3 = " << t3 << " t4 = " << t4 << endl;
 }
 
-int ReadPoints(int argc, char** argv, int &K, int &N, int &D, double *data, int &commsize, ofstream &output) {
-	if (argc != 4) {
-		std::printf("Usage: %s number_of_clusters input_file output_file\n", argv[0]);
-		return 1;
-	}
-
-	K = atoi(argv[1]);
-
-	char* input_file = argv[2];
-	ifstream input;
-	input.open(input_file, ifstream::in);
-	if (!input) {
-		cerr << "Error: input file could not be opened" << endl;
-		return 1;
-	}
-
-	free(data);
-	input >> N >> D;
-	data = (double*)malloc(N*D*sizeof(double));
-	for (int i = 0; i < N; ++i) {
-		for (int d = 0; d < D; ++d) {
-			double coord;
-			input >> coord;
-			data[i*D + d] = coord;
-		}
-	}
-	input.close();
-
-	if (N % commsize != 0)
-		MPI_Abort(MPI_COMM_WORLD, 1);
-
-	char* output_file = argv[3];
-	output.open(output_file, ifstream::out);
-	if (!output) {
-		cerr << "Error: output file could not be opened" << endl;
-		return 1;
-	}
-
-	return 0;
-}
-
 int main(int argc , char** argv) {
 
 	int rank, commsize, len;
@@ -252,9 +202,41 @@ int main(int argc , char** argv) {
 	ofstream output;
 
 	if (rank == 0) {
-		data = (double*)malloc(sizeof(double)); //spike =(
-		if (ReadPoints(argc, argv, K, N, D, data, commsize, output))
+		if (argc != 4) {
+			std::printf("Usage: %s number_of_clusters input_file output_file\n", argv[0]);
 			return 1;
+		}
+
+		K = atoi(argv[1]);
+
+		char* input_file = argv[2];
+		ifstream input;
+		input.open(input_file, ifstream::in);
+		if (!input) {
+			cerr << "Error: input file could not be opened" << endl;
+			return 1;
+		}
+
+		input >> N >> D;
+		data = (double*)malloc(N*D*sizeof(double));
+		for (int i = 0; i < N; ++i) {
+			for (int d = 0; d < D; ++d) {
+				double coord;
+				input >> coord;
+				data[i*D + d] = coord;
+			}
+		}
+		input.close();
+
+		if (N % commsize != 0)
+			MPI_Abort(MPI_COMM_WORLD, 1);
+
+		char* output_file = argv[3];
+		output.open(output_file, ifstream::out);
+		if (!output) {
+			cerr << "Error: output file could not be opened" << endl;
+			return 1;
+		}
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -304,8 +286,8 @@ int main(int argc , char** argv) {
 		output.close();
 	}
 
-	//if (rank == 0)
-		//free(data);
+	if (rank == 0)
+		free(data);
 	free(data_local);
 	free(clusters_local);
 	free(clusters);
@@ -318,4 +300,10 @@ int main(int argc , char** argv) {
     return 0;
 }
 
-//idea - send partof data between threads during reading
+//(high) - scalability
+//(low) - send partof data between threads during reading
+//(medium) - mpi_scatter if points % commsize != 0
+
+/* research about clusters gathering, how it will influence on performance */
+
+/* if not divided by commsize, create array, in last cell remain*/
