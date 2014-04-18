@@ -243,6 +243,11 @@ int main(int argc , char** argv) {
 		char* input_file = argv[2];
 		ifstream input;
 		input.open(input_file, ifstream::in);
+		
+		cout << commsize << " processors, rank = " << rank << ", partsize = " << partsize << endl;
+
+		//MPI_Request* request = (MPI_Request*)malloc(2 * commsize*sizeof(MPI_Request));
+		
 
 		data = (double*)malloc(N*D*sizeof(double));
 		for (int i = 0; i < N; ++i) {
@@ -251,12 +256,14 @@ int main(int argc , char** argv) {
 				input >> coord;
 				data[i*D + d] = coord;
 			}
-			if (i % partsize == 0) {
-				MPI_Isend(data, i*D, MPI_DOUBLE, i / partsize - 1, i, MPI_COMM_WORLD, &request[2*(i / partsize - 1)]);
-				MPI_Irecv(data_local, i*D, MPI_DOUBLE, 0, i, MPI_COMM_WORLD, &request[2 * (i / partsize - 1) + 1]);
-				MPI_Wait(&request[2 * (i / partsize - 1)], &status[2 * (i / partsize - 1)]);
+			if (i != 0 && i % partsize == 0) {
+				int partnum = i / partsize - 1;
+				cout << "partnum = " << partnum << endl;
+				MPI_Isend(data, partsize*D, MPI_DOUBLE, partnum, partnum*2, MPI_COMM_WORLD, &request[partnum]);
 			}
-		}
+		}		
+
+		cout << "second, rank = " << rank << endl;
 		input.close();
 
 		char* output_file = argv[3];
@@ -266,10 +273,18 @@ int main(int argc , char** argv) {
 			return 1;
 		}
 	}
+	
+	MPI_Irecv(data_local, partsize*D, MPI_DOUBLE, 0, rank, MPI_COMM_WORLD, &request[rank + 1]);
 
+	MPI_Waitall(commsize, request, status);
+
+	PrintArray(data_local, partsize, D);
+	
 	MPI_Barrier(MPI_COMM_WORLD);
 
 	cout << "READANDSEND " << MPI_Wtime() - t << endl;
+
+	//if (rank == 1) PrintArray(data_local, partsize, D);
 	
 	int* clusters_local = (int*)malloc(partsize*sizeof(int));
 
