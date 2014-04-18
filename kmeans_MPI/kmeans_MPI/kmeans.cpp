@@ -201,6 +201,8 @@ int main(int argc , char** argv) {
 	double* data;
 	ofstream output;
 
+	double t = MPI_Wtime();
+
 	if (rank == 0) {
 		if (argc != 4) {
 			std::printf("Usage: %s number_of_clusters input_file output_file\n", argv[0]);
@@ -238,6 +240,8 @@ int main(int argc , char** argv) {
 			return 1;
 		}
 	}
+
+	cout << "READANDSEND " << MPI_Wtime() - t << endl;
 
 	MPI_Barrier(MPI_COMM_WORLD);
 
