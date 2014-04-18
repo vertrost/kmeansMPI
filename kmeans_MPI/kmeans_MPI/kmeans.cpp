@@ -240,10 +240,10 @@ int main(int argc , char** argv) {
 			return 1;
 		}
 	}
-
-	cout << "READANDSEND " << MPI_Wtime() - t << endl;
-
+	
 	MPI_Barrier(MPI_COMM_WORLD);
+	
+	cout << "READANDSEND " << MPI_Wtime() - t << endl;
 
 	//Checking if N cannot be divided by commsize
 
