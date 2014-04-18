@@ -198,6 +198,7 @@ int main(int argc , char** argv) {
 
 	int K, N, D;
 	double* data;
+	double *data_local;
 	ofstream output;
 
 	if (rank == 0) {
@@ -217,25 +218,9 @@ int main(int argc , char** argv) {
 		}
 
 		input >> N >> D;
-		data = (double*)malloc(N*D*sizeof(double));
-		for (int i = 0; i < N; ++i) {
-			for (int d = 0; d < D; ++d) {
-				double coord;
-				input >> coord;
-				data[i*D + d] = coord;
-			}
-		}
-		input.close();
-
+		
 		if (N % commsize != 0)
 			MPI_Abort(MPI_COMM_WORLD, 1);
-
-		char* output_file = argv[3];
-		output.open(output_file, ifstream::out);
-		if (!output) {
-			cerr << "Error: output file could not be opened" << endl;
-			return 1;
-		}
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -246,13 +231,50 @@ int main(int argc , char** argv) {
 	MPI_Bcast(&D, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 	int partsize = N / commsize;
+	MPI_Request* request = (MPI_Request*)malloc(2*commsize*sizeof(MPI_Request));
+	MPI_Status* status = (MPI_Status*)malloc(2*commsize*sizeof(MPI_Status));
 
+	data_local = (double*)malloc(partsize*D*sizeof(double));
+
+	double t = MPI_Wtime();
+
+	if (rank == 0) {
+
+		char* input_file = argv[2];
+		ifstream input;
+		input.open(input_file, ifstream::in);
+
+		data = (double*)malloc(N*D*sizeof(double));
+		for (int i = 0; i < N; ++i) {
+			for (int d = 0; d < D; ++d) {
+				double coord;
+				input >> coord;
+				data[i*D + d] = coord;
+			}
+			if (i % partsize == 0) {
+				MPI_Isend(data, i*D, MPI_DOUBLE, i / partsize - 1, i, MPI_COMM_WORLD, &request[2*(i / partsize - 1)]);
+				MPI_Irecv(data_local, i*D, MPI_DOUBLE, 0, i, MPI_COMM_WORLD, &request[2 * (i / partsize - 1) + 1]);
+				MPI_Wait(&request[2 * (i / partsize - 1)], &status[2 * (i / partsize - 1)]);
+			}
+		}
+		input.close();
+
+		char* output_file = argv[3];
+		output.open(output_file, ifstream::out);
+		if (!output) {
+			cerr << "Error: output file could not be opened" << endl;
+			return 1;
+		}
+	}
+
+	MPI_Barrier(MPI_COMM_WORLD);
+
+	cout << "READANDSEND " << MPI_Wtime() - t << endl;
 	
-	double *data_local = (double*)malloc(partsize*D*sizeof(double));
 	int* clusters_local = (int*)malloc(partsize*sizeof(int));
 
-	MPI_Scatter(data, partsize*D, MPI_DOUBLE,
-		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	/*MPI_Scatter(data, partsize*D, MPI_DOUBLE,
+		data_local, partsize*D, MPI_DOUBLE, 0, MPI_COMM_WORLD);*/
 			
     srand(123); // for reproducible results
 	
